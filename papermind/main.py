@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 from papermind.agents.ask_graph import rag_app
 from papermind.agents.embed_index import upsert as upsert_pdf_chunks
-from chromadb import Client as ChromaClient # Renamed to avoid conflict if any
+from chromadb import PersistentClient as ChromaClient # Renamed to avoid conflict if any
 from papermind.tests.create_dummy import create_dummy_pdf_for_testing
 
 app = FastAPI()
