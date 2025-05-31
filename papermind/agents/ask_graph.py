@@ -7,6 +7,7 @@ from papermind.providers import chat, embedder
 class GraphState(TypedDict):
     query: str
     documents: List[Dict]
+    current_token: str # ADDED: New field for the streaming token
 
 async def retrieve_node(state: GraphState) -> Dict[str, List[Dict]]:
     query = state["query"]
@@ -29,25 +30,25 @@ async def generate_node(state: GraphState) -> AsyncGenerator[Dict[str, str], Non
         ctx = "\n".join(f"[p.{c.get('page')}] {c.get('body')[:500]}" for c in chunks)
         msgs.append({"role": "system", "content": ctx})
 
-    print(f"DEBUG: generate_node: Sending messages to LLM: {json.dumps(msgs, indent=2)}") # LOGGING
+    print(f"DEBUG: generate_node: Sending messages to LLM: {json.dumps(msgs, indent=2)}")
     stream = await chat.stream(msgs)
     async for part in stream:
         tok = part.choices[0].delta.content
-        print(f"DEBUG: generate_node: Raw LLM Token: '{tok}'") # LOGGING
+        print(f"DEBUG: generate_node: Raw LLM Token: '{tok}'")
         if tok:
             processed_token = tok.lstrip()
-            print(f"DEBUG: generate_node: Yielding: {{'token': '{processed_token}'}}") # LOGGING
-            yield {"token": processed_token}
+            # UPDATED: Yielding to 'current_token' key
+            print(f"DEBUG: generate_node: Yielding: {{'current_token': '{processed_token}'}}")
+            yield {"current_token": processed_token}
         elif tok is None:
-            print("DEBUG: generate_node: Received None token from LLM stream.") # LOGGING
-        else: # tok is an empty string ""
-            print("DEBUG: generate_node: Received empty string token from LLM stream.") # LOGGING
-
+            print("DEBUG: generate_node: Received None token from LLM stream.")
+        else:
+            print("DEBUG: generate_node: Received empty string token from LLM stream.")
 
 wf = StateGraph(GraphState)
 wf.add_node("retriever", retrieve_node)
 wf.add_node("generator", generate_node)
 wf.set_entry_point("retriever")
 wf.add_edge("retriever", "generator")
-wf.set_finish_point("generator")
+wf.set_finish_point("generator") # The output of 'generator' will update the state
 rag_app = wf.compile()

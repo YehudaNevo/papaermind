@@ -17,25 +17,33 @@ from papermind.tests.create_dummy import create_dummy_pdf_for_testing
 app = FastAPI()
 
 async def stream_rag_response(query: str):
-    print(f"DEBUG: stream_rag_response: Starting for query: '{query}'") # LOGGING
-    async for output_chunk in rag_app.astream({"query": query, "documents": []}):
-        print(f"DEBUG: stream_rag_response: Received chunk from rag_app.astream: {output_chunk}") # LOGGING
+    print(f"DEBUG: stream_rag_response: Starting for query: '{query}'")
+    # Initialize documents and current_token for the initial state
+    # LangGraph expects the full state shape or fields that will be updated.
+    initial_state = {"query": query, "documents": [], "current_token": ""}
+    async for output_chunk in rag_app.astream(initial_state):
+        print(f"DEBUG: stream_rag_response: Received chunk from rag_app.astream: {output_chunk}")
+        # When 'generator' node yields, its output is under the 'generator' key in output_chunk
         if "generator" in output_chunk:
-            token_dict = output_chunk["generator"]
-            if token_dict and "token" in token_dict:
-                actual_token = token_dict["token"]
-                print(f"DEBUG: stream_rag_response: Token from graph: '{actual_token}'") # LOGGING
-                if actual_token is not None:
+            # The content of output_chunk['generator'] is what the generator node yielded,
+            # which is now {"current_token": actual_token}
+            token_update_dict = output_chunk["generator"]
+            if token_update_dict and "current_token" in token_update_dict: # UPDATED key check
+                actual_token = token_update_dict["current_token"] # UPDATED key access
+                print(f"DEBUG: stream_rag_response: Token from graph: '{actual_token}'")
+                if actual_token is not None: # Should not be None if key exists and lstrip was applied
                     sse_event = f"data: {actual_token}\n\n"
-                    print(f"DEBUG: stream_rag_response: Yielding SSE Event: '{sse_event.strip()}'") # LOGGING
+                    print(f"DEBUG: stream_rag_response: Yielding SSE Event: '{sse_event.strip()}'")
                     yield sse_event
                 else:
-                    print("DEBUG: stream_rag_response: actual_token is None, not yielding.") # LOGGING
+                    # This case should be less likely now if an empty token is yielded as ""
+                    print("DEBUG: stream_rag_response: actual_token is None, not yielding.")
             else:
-                print(f"DEBUG: stream_rag_response: 'token' key not in token_dict or token_dict is None: {token_dict}") # LOGGING
-        else:
-            print(f"DEBUG: stream_rag_response: 'generator' key not in output_chunk: {output_chunk}") # LOGGING
-    print(f"DEBUG: stream_rag_response: Finished for query: '{query}'") # LOGGING
+                print(f"DEBUG: stream_rag_response: 'current_token' key not in token_update_dict or dict is None: {token_update_dict}")
+        # We might also get chunks from the 'retriever' node if we wanted to inspect its output here,
+        # but for streaming the final answer, we only care about 'generator' updates.
+        # Example: if "retriever" in output_chunk: print(f"DEBUG: Retriever output: {output_chunk['retriever']}")
+    print(f"DEBUG: stream_rag_response: Finished for query: '{query}'")
 
 
 @app.get("/rag_stream")
