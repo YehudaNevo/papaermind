@@ -20,37 +20,61 @@ async def stream_rag_response(query: str):
     print(f"DEBUG: stream_rag_response: Starting for query: '{query}'")
     initial_state = {"query": query, "documents": [], "current_token": ""}
 
-    # Counter for yielded SSE events
     sse_event_count = 0
+    last_yielded_token_for_sse = None # To avoid sending duplicates for the same actual token
 
     async for output_chunk in rag_app.astream(initial_state):
-        # Log the entire chunk received from astream
         print(f"DEBUG: stream_rag_response: RAW output_chunk from rag_app.astream: {output_chunk}")
 
-        # Check if the chunk contains an update from the 'generator' node
-        if "generator" in output_chunk:
-            generator_output = output_chunk["generator"]
-            # The generator node yields dicts like {'current_token': 'some_token'}
-            if generator_output and "current_token" in generator_output:
-                actual_token = generator_output["current_token"]
-                print(f"DEBUG: stream_rag_response: Extracted actual_token: '{actual_token}'")
+        actual_token_to_send = None
+        token_source_description = "No token found in this chunk"
 
-                if actual_token is not None:
-                    sse_event = f"data: {actual_token}\n\n"
-                    print(f"DEBUG: stream_rag_response: Yielding SSE Event #{sse_event_count + 1}: '{sse_event.strip()}'")
-                    yield sse_event
-                    sse_event_count += 1
+        if isinstance(output_chunk, dict):
+            # Scenario 1: Is 'current_token' directly in the output_chunk (output_chunk IS the full state)
+            if "current_token" in output_chunk:
+                # This indicates output_chunk is likely the full graph state
+                candidate_token = output_chunk["current_token"]
+                if candidate_token is not None: # Ensure it's not an explicit None
+                    actual_token_to_send = candidate_token
+                    token_source_description = f"State['current_token'] ('{actual_token_to_send}')"
+
+            # Scenario 2: Is 'current_token' in output_chunk['generator'] (node-specific output)
+            # This is the structure we've seen in logs (e.g. {'generator': {'current_token': '.'}})
+            elif "generator" in output_chunk:
+                generator_output = output_chunk["generator"]
+                if isinstance(generator_output, dict) and "current_token" in generator_output:
+                    candidate_token = generator_output["current_token"]
+                    if candidate_token is not None:
+                        actual_token_to_send = candidate_token
+                        token_source_description = f"Chunk['generator']['current_token'] ('{actual_token_to_send}')"
                 else:
-                    print("DEBUG: stream_rag_response: actual_token is None, not yielding.")
+                    token_source_description = f"Chunk['generator'] present but no 'current_token' or not a dict. Value: {generator_output}"
             else:
-                print(f"DEBUG: stream_rag_response: 'current_token' key not in generator_output or generator_output is None. generator_output: {generator_output}")
-        # Check for updates from other nodes if necessary for debugging
-        # elif "retriever" in output_chunk:
-        #     print(f"DEBUG: stream_rag_response: Update from retriever: {output_chunk['retriever']}")
+                # This helps identify chunks that don't match expected structures for token streaming
+                keys_in_chunk = list(output_chunk.keys())
+                token_source_description = f"Neither 'current_token' at root nor 'generator' key found. Keys: {keys_in_chunk}"
         else:
-            # This case helps understand if astream is yielding chunks not tied to 'generator' or 'retriever'
-            # or if the keys are different than expected.
-            print(f"DEBUG: stream_rag_response: output_chunk does not contain 'generator' key. Keys: {list(output_chunk.keys()) if isinstance(output_chunk, dict) else 'Not a dict'}")
+            token_source_description = f"output_chunk is not a dict. Type: {type(output_chunk)}, Value: {output_chunk}"
+
+        print(f"DEBUG: stream_rag_response: Token extraction attempt: {token_source_description}")
+
+        if actual_token_to_send is not None:
+            # Avoid sending the exact same token content consecutively if astream yields it multiple times
+            # (e.g. if state update doesn't change the token value but astream still yields)
+            # This simple check might not be perfect for all scenarios (e.g., if "" is a valid distinct token)
+            # but for now, it prevents sending the same non-empty token back-to-back.
+            # We only care if the *actual_token_to_send* is different from the *last_yielded_token_for_SSE*.
+            # An empty string actual_token_to_send should still be sent if it's different from last_yielded_token_for_SSE.
+            if actual_token_to_send != last_yielded_token_for_sse:
+                sse_event = f"data: {actual_token_to_send}\n\n"
+                print(f"DEBUG: stream_rag_response: Yielding SSE Event #{sse_event_count + 1}: '{sse_event.strip()}' (Token: '{actual_token_to_send}')")
+                yield sse_event
+                last_yielded_token_for_sse = actual_token_to_send # Update last sent token
+                sse_event_count += 1
+            else:
+                print(f"DEBUG: stream_rag_response: Skipping yield for duplicate token: '{actual_token_to_send}'")
+        else:
+            print("DEBUG: stream_rag_response: No actual_token_to_send extracted from this chunk.")
 
     print(f"DEBUG: stream_rag_response: Finished for query: '{query}'. Total SSE events yielded: {sse_event_count}")
 
