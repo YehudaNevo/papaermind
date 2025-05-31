@@ -1,6 +1,16 @@
 # Byte-compiled / optimized / DLL files
 
 
+# IDE junk
+.idea/
+
+# runtime artifacts
+papermind/data/
+papermind/store/
+
+# env / secrets
+.env
+papermind/.env
 
 
 # --- Papermind runtime artifacts ---
