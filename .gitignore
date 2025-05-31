@@ -1,4 +1,20 @@
 # Byte-compiled / optimized / DLL files
+
+
+
+
+# --- Papermind runtime artifacts ---
+papermind/data/**        # PDFs and chunks
+papermind/store/**       # ChromaDB files
+# keep the empty dirs in Git if you like:
+# !papermind/data/.gitkeep
+# !papermind/store/.gitkeep
+
+# --- Secrets / local config ---
+.env
+papermind/.env
+*.env                     # any other env files
+
 __pycache__/
 *.py[cod]
 *$py.class
