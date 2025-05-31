@@ -5,34 +5,38 @@ from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 import os
 import argparse
-import json # Required for SSE JSON data if we switch to that format
+import json
 
-# User provided: ensure .env is loaded relative to this file's directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 from papermind.agents.ask_graph import rag_app
 from papermind.agents.embed_index import upsert as upsert_pdf_chunks
-# User updated to PersistentClient, renamed here to avoid conflict if ChromaClient was used elsewhere
 from chromadb import PersistentClient as ChromaServicePersistentClient
 from papermind.tests.create_dummy import create_dummy_pdf_for_testing
 
 app = FastAPI()
 
 async def stream_rag_response(query: str):
-    # User provided: initial state for astream includes documents as empty list
+    print(f"DEBUG: stream_rag_response: Starting for query: '{query}'") # LOGGING
     async for output_chunk in rag_app.astream({"query": query, "documents": []}):
+        print(f"DEBUG: stream_rag_response: Received chunk from rag_app.astream: {output_chunk}") # LOGGING
         if "generator" in output_chunk:
-            # The generator node now yields a dict: {"token": "actual_token"}
             token_dict = output_chunk["generator"]
             if token_dict and "token" in token_dict:
                 actual_token = token_dict["token"]
-                # Ensure actual_token is not None before sending
+                print(f"DEBUG: stream_rag_response: Token from graph: '{actual_token}'") # LOGGING
                 if actual_token is not None:
-                     # User's SSE format: data: <content>
+                    sse_event = f"data: {actual_token}\n\n"
+                    print(f"DEBUG: stream_rag_response: Yielding SSE Event: '{sse_event.strip()}'") # LOGGING
+                    yield sse_event
+                else:
+                    print("DEBUG: stream_rag_response: actual_token is None, not yielding.") # LOGGING
+            else:
+                print(f"DEBUG: stream_rag_response: 'token' key not in token_dict or token_dict is None: {token_dict}") # LOGGING
+        else:
+            print(f"DEBUG: stream_rag_response: 'generator' key not in output_chunk: {output_chunk}") # LOGGING
+    print(f"DEBUG: stream_rag_response: Finished for query: '{query}'") # LOGGING
 
-
-                     # Content here is the token itself.
-                    yield f"data: {actual_token}\n\n"
 
 @app.get("/rag_stream")
 async def ask_question_stream(q: str = Query(..., min_length=1)):
@@ -58,9 +62,8 @@ async def index_documents_cli(pdf_directory: str):
     for filename in os.listdir(pdf_directory):
         if filename.lower().endswith(".pdf"):
             pdf_path = os.path.join(pdf_directory, filename)
-            # print(f"Processing: {pdf_path}") # This line is in embed_index.upsert now
             try:
-                await upsert_pdf_chunks(pdf_path) # upsert now prints its own status
+                await upsert_pdf_chunks(pdf_path)
                 found_pdfs = True
             except Exception as e:
                 print(f"Error processing {pdf_path}: {e}")
@@ -79,7 +82,6 @@ async def index_documents_cli(pdf_directory: str):
 
 def main_cli():
     parser = argparse.ArgumentParser(description="PaperMind CLI")
-    # User provided: required=True for subparsers
     subparsers = parser.add_subparsers(dest="command", help="Available commands", required=True)
 
     index_parser = subparsers.add_parser("index", help="Index PDF documents")
@@ -92,7 +94,6 @@ def main_cli():
     args = parser.parse_args()
 
     if args.command == "index":
-        # User's logic for ensuring dummy PDF exists if path is default and empty
         if args.path == "papermind/data/pdfs":
             if not os.path.exists(args.path):
                 print(f"Directory {args.path} not found. Creating it and a dummy PDF.")
@@ -103,13 +104,11 @@ def main_cli():
         asyncio.run(index_documents_cli(args.path))
     elif args.command == "serve":
         print(f"Starting server on {args.host}:{args.port}")
-        os.makedirs("papermind/store", exist_ok=True) # Ensure store dir exists
+        os.makedirs("papermind/store", exist_ok=True)
         dummy_pdf_default_dir = "papermind/data/pdfs"
-        # User's logic to create dummy PDF before server start for DB check
         created_dummy_path = create_dummy_pdf_for_testing(pdf_dir=dummy_pdf_default_dir)
 
         try:
-            # Use the renamed import for clarity
             client = ChromaServicePersistentClient(path="papermind/store")
             collection = client.get_or_create_collection("chunks")
             if collection.count() == 0:
