@@ -1,5 +1,4 @@
-// papermind/frontend/app/rag/route.ts
-export const dynamic = 'force-dynamic'; // Ensures the route is always dynamic
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -9,8 +8,6 @@ export async function GET(request: Request) {
     return new Response('Missing query parameter "q"', { status: 400 });
   }
 
-  // Assume the FastAPI backend is running on http://127.0.0.1:8000
-  // This URL should be configurable, e.g., via environment variables in a real app.
   const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:8000';
 
   try {
@@ -26,7 +23,6 @@ export async function GET(request: Request) {
       return new Response('Backend returned no stream body', { status: 500 });
     }
 
-    // Create a new ReadableStream from the backend's response body
     const stream = new ReadableStream({
       async start(controller) {
         const reader = response.body!.getReader();

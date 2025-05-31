@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "papermind"
+version = "0.1.0"
+description = "PaperMind RAG Application Backend"
+authors = ["Jules <jules@example.com>"] # Placeholder author
+readme = "README.md" # Assumes README.md will be in the same directory (papermind/)
+packages = [{include = "papermind"}] # Specifies the main package is 'papermind'
+
+[tool.poetry.dependencies]
+python = "^3.9" # Specify Python version compatibility
+
+openai = "^1.10.0" # For OpenAI API
+PyMuPDF = "^1.23.21" # Fitz for PDF processing
+chromadb = "^0.4.22" # Vector database
+langgraph = "^0.0.40" # LangGraph for building stateful, multi-actor applications
+fastapi = "^0.109.0" # Web framework
+uvicorn = {extras = ["standard"], version = "^0.27.0"} # ASGI server
+python-dotenv = "^1.0.1" # For .env file loading
+tiktoken = "^0.6.0" # For token counting with OpenAI
+python-multipart = "^0.0.7" # For FastAPI file handling (often useful)
+aiofiles = "^23.2.1" # For async file operations (good practice with FastAPI)
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0" # Example dev dependency
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

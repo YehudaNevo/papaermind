@@ -1,5 +1,4 @@
-// papermind/frontend/app/page.tsx
-'use client'; // Make this a Client Component
+'use client';
 
 import { useState, FormEvent } from 'react';
 
@@ -34,20 +33,46 @@ export default function Home() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let accumulatedResponse = '';
+      const eventSeparator = "\n\n";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
           break;
         }
-        accumulatedResponse += decoder.decode(value, { stream: true });
-        setStreamingResponse(accumulatedResponse);
+        buffer += decoder.decode(value, { stream: true });
+
+        let eventEndIndex = buffer.indexOf(eventSeparator);
+        while (eventEndIndex !== -1) {
+          const rawEvent = buffer.substring(0, eventEndIndex);
+          buffer = buffer.substring(eventEndIndex + eventSeparator.length);
+
+          if (rawEvent.startsWith("data: ")) {
+            const jsonData = rawEvent.substring("data: ".length);
+            try {
+                // Assuming the backend sends plain text tokens directly, not JSON strings for each token
+                // If it was JSON: const parsedToken = JSON.parse(jsonData);
+                // For plain text:
+                setStreamingResponse(prev => prev + jsonData);
+            } catch (e) {
+                console.error("Failed to parse JSON from stream or handle data: ", jsonData, e);
+            }
+          }
+          eventEndIndex = buffer.indexOf(eventSeparator);
+        }
       }
+      // Process any remaining data in the buffer after the loop (if stream ends without \n\n)
+      if (buffer.startsWith("data: ")) {
+        const jsonData = buffer.substring("data: ".length);
+        setStreamingResponse(prev => prev + jsonData);
+      }
+
+
     } catch (err: any) {
       console.error('Error fetching or processing stream:', err);
       setError(err.message || 'An unknown error occurred.');
-      setStreamingResponse(''); // Clear any partial response
+      setStreamingResponse('');
     } finally {
       setIsLoading(false);
     }
@@ -85,7 +110,6 @@ export default function Home() {
       {streamingResponse && (
         <div className="bg-gray-50 p-4 border border-gray-200 rounded-md shadow">
           <h2 className="text-xl font-semibold mb-3 text-gray-700">Answer:</h2>
-          {/* Use a <pre> tag for preserving whitespace and newlines from the stream */}
           <pre className="whitespace-pre-wrap break-words text-gray-800 leading-relaxed">
             {streamingResponse}
           </pre>
