@@ -17,64 +17,69 @@ from papermind.tests.create_dummy import create_dummy_pdf_for_testing
 app = FastAPI()
 
 async def stream_rag_response(query: str):
-    print(f"DEBUG: stream_rag_response: Starting for query: '{query}'")
+    print(f"DEBUG: stream_rag_response: Starting for query: '{query}' using astream_events")
     initial_state = {"query": query, "documents": [], "current_token": ""}
 
     sse_event_count = 0
-    last_yielded_token_for_sse = None # To avoid sending duplicates for the same actual token
+    last_yielded_token_for_sse = None
 
-    async for output_chunk in rag_app.astream(initial_state):
-        print(f"DEBUG: stream_rag_response: RAW output_chunk from rag_app.astream: {output_chunk}")
+    # Using astream_events. version="v1" or "v2" might be needed depending on LangGraph version.
+    # Let's assume "v1" for now or try without if it causes issues.
+    # Most examples use version="v1" or "v2", "v1" is for older LangGraph.
+    # Given the previous InvalidUpdateError, this langgraph version might be older.
+    # Let's try version="v1" first. If not available, the tool will error and I can try "v2" or without.
+    # Based on https://python.langchain.com/docs/langgraph/concepts/#streaming-events
+    # it seems `version="v1"` is for specific LCEL event stream.
+    # `astream_events` itself should provide node-level events.
+    # The `streaming_events.py` example in LangGraph repo uses `astream_events(input, version="v1")` for `stream_chunk_to_event`
+    # Let's use version="v1" as it's commonly seen with LLM streaming events.
+    # If that doesn't work or gives wrong events, we might need version="v2" or a different approach.
+    # For now, let's try with version="v1" as it's often related to streaming individual chunks.
+
+    async for event in rag_app.astream_events(initial_state, version="v1"):
+        event_name = event.get("event")
+        event_data = event.get("data")
+        event_node_name = event.get("name") # The name of the node the event is from
+
+        print(f"DEBUG: stream_rag_response: RAW EVENT from astream_events: event_name='{event_name}', node='{event_node_name}', data='{event_data}'")
 
         actual_token_to_send = None
-        token_source_description = "No token found in this chunk"
 
-        if isinstance(output_chunk, dict):
-            # Scenario 1: Is 'current_token' directly in the output_chunk (output_chunk IS the full state)
-            if "current_token" in output_chunk:
-                # This indicates output_chunk is likely the full graph state
-                candidate_token = output_chunk["current_token"]
-                if candidate_token is not None: # Ensure it's not an explicit None
-                    actual_token_to_send = candidate_token
-                    token_source_description = f"State['current_token'] ('{actual_token_to_send}')"
+        # We are interested in tokens streamed from the 'generator' node.
+        # LangGraph's 'on_chain_stream' or 'on_llm_stream' (if LLM is wrapped by LangChain)
+        # or custom events might carry these.
+        # If our 'generator' node directly yields dicts {'current_token': ...},
+        # these might appear as data from an event related to the 'generator' node finishing a stream part.
 
-            # Scenario 2: Is 'current_token' in output_chunk['generator'] (node-specific output)
-            # This is the structure we've seen in logs (e.g. {'generator': {'current_token': '.'}})
-            elif "generator" in output_chunk:
-                generator_output = output_chunk["generator"]
-                if isinstance(generator_output, dict) and "current_token" in generator_output:
-                    candidate_token = generator_output["current_token"]
-                    if candidate_token is not None:
-                        actual_token_to_send = candidate_token
-                        token_source_description = f"Chunk['generator']['current_token'] ('{actual_token_to_send}')"
-                else:
-                    token_source_description = f"Chunk['generator'] present but no 'current_token' or not a dict. Value: {generator_output}"
-            else:
-                # This helps identify chunks that don't match expected structures for token streaming
-                keys_in_chunk = list(output_chunk.keys())
-                token_source_description = f"Neither 'current_token' at root nor 'generator' key found. Keys: {keys_in_chunk}"
-        else:
-            token_source_description = f"output_chunk is not a dict. Type: {type(output_chunk)}, Value: {output_chunk}"
+        if event_name == "on_chain_stream" and event_node_name == "generator":
+            # Check if 'chunk' in event_data contains our {'current_token': ...}
+            # The structure of event_data['chunk'] can vary.
+            # If the node itself (AsyncGenerator) yields {'current_token': X},
+            # then event_data['chunk'] might be that dict.
+            chunk_data = event_data.get("chunk")
+            if isinstance(chunk_data, dict) and "current_token" in chunk_data:
+                actual_token_to_send = chunk_data["current_token"]
+                print(f"DEBUG: stream_rag_response (on_chain_stream): Extracted token: '{actual_token_to_send}' from chunk: {chunk_data}")
 
-        print(f"DEBUG: stream_rag_response: Token extraction attempt: {token_source_description}")
+        # Alternative check: Sometimes the entire output of the node for that stream event is in 'data'
+        # This depends on the LangGraph version and event type.
+        # Let's also log if we see an 'on_chain_end' for the generator and what its data looks like.
+        elif event_name == "on_chain_end" and event_node_name == "generator":
+             print(f"DEBUG: stream_rag_response: Event 'on_chain_end' for 'generator'. Data: {event_data}")
+             # This usually contains the final accumulated output of the node, not intermediate tokens.
+             # However, good to log for understanding.
 
         if actual_token_to_send is not None:
-            # Avoid sending the exact same token content consecutively if astream yields it multiple times
-            # (e.g. if state update doesn't change the token value but astream still yields)
-            # This simple check might not be perfect for all scenarios (e.g., if "" is a valid distinct token)
-            # but for now, it prevents sending the same non-empty token back-to-back.
-            # We only care if the *actual_token_to_send* is different from the *last_yielded_token_for_SSE*.
-            # An empty string actual_token_to_send should still be sent if it's different from last_yielded_token_for_SSE.
-            if actual_token_to_send != last_yielded_token_for_sse:
+            if actual_token_to_send != last_yielded_token_for_sse or actual_token_to_send == "": # Allow empty strings if distinct
                 sse_event = f"data: {actual_token_to_send}\n\n"
                 print(f"DEBUG: stream_rag_response: Yielding SSE Event #{sse_event_count + 1}: '{sse_event.strip()}' (Token: '{actual_token_to_send}')")
                 yield sse_event
-                last_yielded_token_for_sse = actual_token_to_send # Update last sent token
+                last_yielded_token_for_sse = actual_token_to_send
                 sse_event_count += 1
             else:
-                print(f"DEBUG: stream_rag_response: Skipping yield for duplicate token: '{actual_token_to_send}'")
-        else:
-            print("DEBUG: stream_rag_response: No actual_token_to_send extracted from this chunk.")
+                print(f"DEBUG: stream_rag_response: Skipping yield for duplicate/same-as-last token: '{actual_token_to_send}'")
+        # else:
+            # This would be too verbose if not an error: print(f"DEBUG: stream_rag_response: No token extracted from this event.")
 
     print(f"DEBUG: stream_rag_response: Finished for query: '{query}'. Total SSE events yielded: {sse_event_count}")
 
